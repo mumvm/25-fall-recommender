@@ -28,6 +28,100 @@ except:
     world.cprint("Cpp extension not loaded")
     sample_ext = False
 
+# =============== LAMB Optimizer ===============
+class Lamb(optim.Optimizer):
+    def __init__(self,
+                 params,
+                 lr=1e-3,
+                 betas=(0.9, 0.999),
+                 eps=1e-6,
+                 weight_decay=0,
+                 clamp_value=10,
+                 debias=True):
+        defaults = dict(
+            lr=lr,
+            betas=betas,
+            eps=eps,
+            weight_decay=weight_decay,
+            clamp_value=clamp_value,
+            debias=debias
+        )
+        super(Lamb, self).__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            loss = closure()
+
+        for group in self.param_groups:
+            lr = group['lr']
+            beta1, beta2 = group['betas']
+            eps = group['eps']
+            wd = group['weight_decay']
+            clamp_value = group['clamp_value']
+            debias = group['debias']
+
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                grad = p.grad
+
+                if grad.is_sparse:
+                    raise RuntimeError("LAMB does not support sparse gradients.")
+
+                state = self.state[p]
+
+                # State Initialization
+                if len(state) == 0:
+                    state["step"] = 0
+                    state["exp_avg"] = torch.zeros_like(p)
+                    state["exp_avg_sq"] = torch.zeros_like(p)
+
+                exp_avg = state["exp_avg"]
+                exp_avg_sq = state["exp_avg_sq"]
+
+                state["step"] += 1
+                step = state["step"]
+
+                # Adam moment update
+                exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
+                exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+
+                # Adam bias correction
+                if debias:
+                    bias_correction1 = 1 - beta1 ** step
+                    bias_correction2 = 1 - beta2 ** step
+                    m = exp_avg / bias_correction1
+                    v = exp_avg_sq / bias_correction2
+                else:
+                    m, v = exp_avg, exp_avg_sq
+
+                adam_step = m / (v.sqrt() + eps)
+
+                # Decoupled weight decay
+                if wd != 0:
+                    adam_step = adam_step + wd * p
+
+                # Trust ratio
+                w_norm = p.norm(p=2)
+                g_norm = adam_step.norm(p=2)
+
+                # if w_norm > 0 and g_norm > 0: #수정
+                if w_norm.item() > 0 and g_norm.item() > 0:
+                    trust_ratio = w_norm / g_norm
+                else:
+                    trust_ratio = 1.0
+
+                # trust_ratio = min(trust_ratio, clamp_value) #수정
+                trust_ratio = min(trust_ratio.item(), clamp_value)
+
+                p.add_(adam_step, alpha=-lr * trust_ratio) # Parameter update
+
+        return loss
+
+# ==============================================
+
 
 class BPRLoss:
     def __init__(self,
@@ -36,7 +130,8 @@ class BPRLoss:
         self.model = recmodel
         self.weight_decay = config['decay']
         self.lr = config['lr']
-        self.opt = optim.Adam(recmodel.parameters(), lr=self.lr)
+        # self.opt = optim.Adam(recmodel.parameters(), lr=self.lr)
+        self.opt = Lamb(recmodel.parameters(), lr=self.lr, weight_decay=self.weight_decay)
 
     def stageOne(self, users, pos, neg):
         loss, reg_loss = self.model.bpr_loss(users, pos, neg)
