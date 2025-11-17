@@ -21,6 +21,8 @@ from sklearn.metrics import roc_auc_score
 
 
 CORES = multiprocessing.cpu_count() // 2
+metric_history = []
+hr_history = []
 
 
 def BPR_train_original(dataset, recommend_model, loss_class, epoch, neg_k=1, w=None):
@@ -62,14 +64,17 @@ def test_one_batch(X):
     groundTrue = X[1]
     r = utils.getLabel(groundTrue, sorted_items)
     pre, recall, ndcg = [], [], []
+    hr = [] # Additional metric : hit ratio
     for k in world.topks:
         ret = utils.RecallPrecision_ATk(groundTrue, r, k)
         pre.append(ret['precision'])
         recall.append(ret['recall'])
         ndcg.append(utils.NDCGatK_r(groundTrue,r,k))
+        hr.append(utils.HitRatio_ATk(groundTrue, r, k))
     return {'recall':np.array(recall), 
             'precision':np.array(pre), 
-            'ndcg':np.array(ndcg)}
+            'ndcg':np.array(ndcg),
+            'hr':np.array(hr)}
         
             
 def Test(dataset, Recmodel, epoch, w=None, multicore=0):
@@ -84,7 +89,8 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0):
         pool = multiprocessing.Pool(CORES)
     results = {'precision': np.zeros(len(world.topks)),
                'recall': np.zeros(len(world.topks)),
-               'ndcg': np.zeros(len(world.topks))}
+               'ndcg': np.zeros(len(world.topks)),
+               'hr': np.zeros(len(world.topks))}
     with torch.no_grad():
         users = list(testDict.keys())
         try:
@@ -136,10 +142,36 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0):
             results['recall'] += result['recall']
             results['precision'] += result['precision']
             results['ndcg'] += result['ndcg']
+            results['hr'] += result['hr']
         results['recall'] /= float(len(users))
         results['precision'] /= float(len(users))
         results['ndcg'] /= float(len(users))
+        results['hr'] /= float(len(users))
         # results['auc'] = np.mean(auc_record)
+        # ----- Optimizer metrics -----
+        primary_recall = float(results['recall'][0]) if len(results['recall']) > 0 else 0.0
+        if metric_history:
+            last_epoch, last_recall = metric_history[-1]
+            delta_epoch = max(epoch - last_epoch, 1)
+            convergence_speed = (primary_recall - last_recall) / delta_epoch
+            recall_values = [r for (_, r) in metric_history] + [primary_recall]
+            variance = float(np.var(recall_values))
+        else:
+            convergence_speed = 0.0
+            variance = 0.0
+        metric_history.append((epoch, primary_recall))
+        # Hit Ratio tracking for optimizer stats
+        primary_hr = float(results['hr'][0]) if len(results['hr']) > 0 else 0.0
+        if hr_history:
+            hr_values = [h for (_, h) in hr_history] + [primary_hr]
+            hr_variance = float(np.var(hr_values))
+        else:
+            hr_variance = 0.0
+        hr_history.append((epoch, primary_hr))
+
+        results['convergence_speed'] = convergence_speed
+        results['variance'] = variance
+        # results['hr_variance'] = hr_variance
         if world.tensorboard:
             w.add_scalars(f'Test/Recall@{world.topks}',
                           {str(world.topks[i]): results['recall'][i] for i in range(len(world.topks))}, epoch)
@@ -147,6 +179,11 @@ def Test(dataset, Recmodel, epoch, w=None, multicore=0):
                           {str(world.topks[i]): results['precision'][i] for i in range(len(world.topks))}, epoch)
             w.add_scalars(f'Test/NDCG@{world.topks}',
                           {str(world.topks[i]): results['ndcg'][i] for i in range(len(world.topks))}, epoch)
+            w.add_scalars(f'Test/HR@{world.topks}',
+                          {str(world.topks[i]): results['hr'][i] for i in range(len(world.topks))}, epoch)
+            w.add_scalars('Optimizer/ConvergenceSpeed', {'recall@top1': convergence_speed}, epoch)
+            w.add_scalars('Optimizer/Variance', {'recall@top1': variance}, epoch)
+            # w.add_scalars('Optimizer/HRVariance', {'hr@top1': hr_variance}, epoch)
         if multicore == 1:
             pool.close()
         print(results)

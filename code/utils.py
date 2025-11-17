@@ -28,7 +28,8 @@ except:
     world.cprint("Cpp extension not loaded")
     sample_ext = False
 
-# =============== LAMB Optimizer ===============
+# ======================LAMB optimizer========================
+
 class Lamb(optim.Optimizer):
     def __init__(self,
                  params,
@@ -107,13 +108,11 @@ class Lamb(optim.Optimizer):
                 w_norm = p.norm(p=2)
                 g_norm = adam_step.norm(p=2)
 
-                # if w_norm > 0 and g_norm > 0: #수정
                 if w_norm.item() > 0 and g_norm.item() > 0:
                     trust_ratio = w_norm / g_norm
                 else:
                     trust_ratio = 1.0
 
-                # trust_ratio = min(trust_ratio, clamp_value) #수정
                 trust_ratio = min(trust_ratio.item(), clamp_value)
 
                 p.add_(adam_step, alpha=-lr * trust_ratio) # Parameter update
@@ -121,7 +120,6 @@ class Lamb(optim.Optimizer):
         return loss
 
 # ==============================================
-
 
 class BPRLoss:
     def __init__(self,
@@ -131,7 +129,13 @@ class BPRLoss:
         self.weight_decay = config['decay']
         self.lr = config['lr']
         # self.opt = optim.Adam(recmodel.parameters(), lr=self.lr)
-        self.opt = Lamb(recmodel.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        self.opt = Lamb(recmodel.parameters(),
+                            lr=self.lr,
+                            weight_decay=self.weight_decay,
+                            betas=config.get('lamb_betas', (0.9, 0.999)),
+                            eps=config.get('lamb_eps', 1e-6),
+                            clamp_value=config.get('lamb_clamp', 10),
+                            debias=config.get('lamb_debias', True))
 
     def stageOne(self, users, pos, neg):
         loss, reg_loss = self.model.bpr_loss(users, pos, neg)
@@ -371,6 +375,11 @@ def getLabel(test_data, pred_data):
         pred = np.array(pred).astype("float")
         r.append(pred)
     return np.array(r).astype('float')
+
+# ====================Additional Metrics=============================
+
+def HitRatio_ATk(ground_true, ranked, k):
+    return 1.0 if np.sum(ranked[:k]) > 0 else 0.0
 
 # ====================end Metrics=============================
 # =========================================================
