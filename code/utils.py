@@ -17,6 +17,7 @@ from model import PairWiseModel
 from sklearn.metrics import roc_auc_score
 import random
 import os
+import csv
 try:
     from cppimport import imp_from_filepath
     from os.path import join, dirname
@@ -383,3 +384,46 @@ def HitRatio_ATk(ground_true, ranked, k):
 
 # ====================end Metrics=============================
 # =========================================================
+
+
+class MetricsRecorder:
+    """
+    Simple CSV logger that stores evaluation metrics for every epoch.
+    """
+    def __init__(self, log_path, topks):
+        self.log_path = log_path
+        self.topks = list(topks)
+        directory = os.path.dirname(log_path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        self.header = self._build_header()
+        self._initialized = os.path.exists(log_path) and os.path.getsize(log_path) > 0
+
+    def _build_header(self):
+        columns = ['epoch']
+        metric_names = ['precision', 'recall', 'ndcg', 'hr']
+        for metric in metric_names:
+            for k in self.topks:
+                columns.append(f"{metric}@{k}")
+        columns.extend(['convergence_speed', 'variance'])
+        return columns
+
+    def log(self, epoch, metrics):
+        row = {key: 0.0 for key in self.header}
+        row['epoch'] = epoch
+        for metric_name in ['precision', 'recall', 'ndcg', 'hr']:
+            values = metrics.get(metric_name)
+            if values is None:
+                continue
+            for idx, k in enumerate(self.topks):
+                column = f"{metric_name}@{k}"
+                value = values[idx] if idx < len(values) else 0.0
+                row[column] = float(value)
+        row['convergence_speed'] = float(metrics.get('convergence_speed', 0.0))
+        row['variance'] = float(metrics.get('variance', 0.0))
+        with open(self.log_path, 'a', newline='') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=self.header)
+            if not self._initialized:
+                writer.writeheader()
+                self._initialized = True
+            writer.writerow(row)
