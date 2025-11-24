@@ -129,14 +129,27 @@ class BPRLoss:
         self.model = recmodel
         self.weight_decay = config['decay']
         self.lr = config['lr']
-        # self.opt = optim.Adam(recmodel.parameters(), lr=self.lr)
-        self.opt = Lamb(recmodel.parameters(),
-                            lr=self.lr,
-                            weight_decay=self.weight_decay,
-                            betas=config.get('lamb_betas', (0.9, 0.999)),
-                            eps=config.get('lamb_eps', 1e-6),
-                            clamp_value=config.get('lamb_clamp', 10),
-                            debias=config.get('lamb_debias', True))
+        self.optimizer_name = config.get('optimizer', 'adamw').lower()
+
+        if self.optimizer_name in ('lamb', 'cluster'):
+            # Keep Lamb as the default (and treat 'cluster' as the same) to preserve previous behavior.
+            self.opt = Lamb(
+                recmodel.parameters(),
+                lr=self.lr,
+                weight_decay=self.weight_decay,
+                betas=config.get('lamb_betas', (0.9, 0.999)),
+                eps=config.get('lamb_eps', 1e-6),
+                clamp_value=config.get('lamb_clamp', 10),
+                debias=config.get('lamb_debias', True),
+            )
+        elif self.optimizer_name == 'adamw':
+            self.opt = optim.AdamW(recmodel.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        elif self.optimizer_name == 'sgd':
+            self.opt = optim.SGD(recmodel.parameters(), lr=self.lr, weight_decay=self.weight_decay, momentum=0.9)
+        elif self.optimizer_name == 'rmsprop':
+            self.opt = optim.RMSprop(recmodel.parameters(), lr=self.lr, weight_decay=self.weight_decay, momentum=0.9)
+        else:
+            raise ValueError(f"Unsupported optimizer: {self.optimizer_name}")
 
     def stageOne(self, users, pos, neg):
         loss, reg_loss = self.model.bpr_loss(users, pos, neg)
