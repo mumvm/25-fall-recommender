@@ -15,6 +15,7 @@ from time import time
 from model import LightGCN
 from model import PairWiseModel
 from sklearn.metrics import roc_auc_score
+from optimizers import ClusterCoupledAdamW
 import random
 import os
 import csv
@@ -131,8 +132,28 @@ class BPRLoss:
         self.lr = config['lr']
         self.optimizer_name = config.get('optimizer', 'adamw').lower()
 
-        if self.optimizer_name in ('lamb', 'cluster'):
-            # Keep Lamb as the default (and treat 'cluster' as the same) to preserve previous behavior.
+        if self.optimizer_name == 'cluster':
+            cluster_params = []
+            for name, param in recmodel.named_parameters():
+                is_embedding = param.dim() == 2 and ('embedding' in name or param.shape[0] > 1)
+                cluster_params.append({
+                    'params': [param],
+                    'clustered': is_embedding,
+                })
+
+            self.opt = ClusterCoupledAdamW(
+                cluster_params,
+                lr=self.lr,
+                weight_decay=self.weight_decay,
+                betas=config.get('cluster_betas', (0.9, 0.999)),
+                eps=config.get('cluster_eps', 1e-8),
+                num_clusters=config.get('cluster_k', 16),
+                alpha=config.get('cluster_alpha', 0.3),
+                recluster_interval=config.get('cluster_interval', 200),
+                warmup_steps=config.get('cluster_warmup', 10),
+                min_cluster_rows=config.get('cluster_min_rows', 2),
+            )
+        elif self.optimizer_name == 'lamb':
             self.opt = Lamb(
                 recmodel.parameters(),
                 lr=self.lr,

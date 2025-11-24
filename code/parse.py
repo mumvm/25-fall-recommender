@@ -42,6 +42,18 @@ def parse_args():
     parser.add_argument('--optimizer', type=str, default='adamw',
                         choices=['adamw', 'sgd', 'rmsprop', 'lamb', 'cluster'],
                         help="optimizer for BPR training")
+    # ------------------ cluster option ------------------
+    parser.add_argument('--cluster_alpha', type=float, default=0.3,
+                        help="gradient mixing strength for cluster-coupled AdamW")
+    parser.add_argument('--cluster_k', type=int, default=16,
+                        help="number of clusters for embedding rows")
+    parser.add_argument('--cluster_interval', type=int, default=200,
+                        help="steps between reclustering runs")
+    parser.add_argument('--cluster_warmup', type=int, default=10,
+                        help="skip clustering during the first N optimizer steps")
+    parser.add_argument('--cluster_min_rows', type=int, default=2,
+                        help="minimum rows needed to apply clustering")
+    # --------------------- end ---------------------
     parser.add_argument('--multicore', type=int, default=0, help='whether we use multiprocessing or not in test')
     parser.add_argument('--pretrain', type=int, default=0, help='whether we use pretrained weight or not')
     parser.add_argument('--seed', type=int, default=2020, help='random seed')
