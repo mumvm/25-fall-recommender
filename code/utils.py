@@ -15,7 +15,7 @@ from time import time
 from model import LightGCN
 from model import PairWiseModel
 from sklearn.metrics import roc_auc_score
-from optimizers import ClusterCoupledAdamW
+from optimizers import ClusterCoupledAdam, Lamb
 import random
 import os
 import csv
@@ -29,99 +29,6 @@ try:
 except:
     world.cprint("Cpp extension not loaded")
     sample_ext = False
-
-# ======================LAMB optimizer========================
-
-class Lamb(optim.Optimizer):
-    def __init__(self,
-                 params,
-                 lr=1e-3,
-                 betas=(0.9, 0.999),
-                 eps=1e-6,
-                 weight_decay=0,
-                 clamp_value=10,
-                 debias=True):
-        defaults = dict(
-            lr=lr,
-            betas=betas,
-            eps=eps,
-            weight_decay=weight_decay,
-            clamp_value=clamp_value,
-            debias=debias
-        )
-        super(Lamb, self).__init__(params, defaults)
-
-    @torch.no_grad()
-    def step(self, closure=None):
-        loss = None
-        if closure is not None:
-            loss = closure()
-
-        for group in self.param_groups:
-            lr = group['lr']
-            beta1, beta2 = group['betas']
-            eps = group['eps']
-            wd = group['weight_decay']
-            clamp_value = group['clamp_value']
-            debias = group['debias']
-
-            for p in group['params']:
-                if p.grad is None:
-                    continue
-                grad = p.grad
-
-                if grad.is_sparse:
-                    raise RuntimeError("LAMB does not support sparse gradients.")
-
-                state = self.state[p]
-
-                # State Initialization
-                if len(state) == 0:
-                    state["step"] = 0
-                    state["exp_avg"] = torch.zeros_like(p)
-                    state["exp_avg_sq"] = torch.zeros_like(p)
-
-                exp_avg = state["exp_avg"]
-                exp_avg_sq = state["exp_avg_sq"]
-
-                state["step"] += 1
-                step = state["step"]
-
-                # Adam moment update
-                exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
-                exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
-
-                # Adam bias correction
-                if debias:
-                    bias_correction1 = 1 - beta1 ** step
-                    bias_correction2 = 1 - beta2 ** step
-                    m = exp_avg / bias_correction1
-                    v = exp_avg_sq / bias_correction2
-                else:
-                    m, v = exp_avg, exp_avg_sq
-
-                adam_step = m / (v.sqrt() + eps)
-
-                # Decoupled weight decay
-                if wd != 0:
-                    adam_step = adam_step + wd * p
-
-                # Trust ratio
-                w_norm = p.norm(p=2)
-                g_norm = adam_step.norm(p=2)
-
-                if w_norm.item() > 0 and g_norm.item() > 0:
-                    trust_ratio = w_norm / g_norm
-                else:
-                    trust_ratio = 1.0
-
-                trust_ratio = min(trust_ratio.item(), clamp_value)
-
-                p.add_(adam_step, alpha=-lr * trust_ratio) # Parameter update
-
-        return loss
-
-# ==============================================
 
 class BPRLoss:
     def __init__(self,
@@ -141,7 +48,7 @@ class BPRLoss:
                     'clustered': is_embedding,
                 })
 
-            self.opt = ClusterCoupledAdamW(
+            self.opt = ClusterCoupledAdam(
                 cluster_params,
                 lr=self.lr,
                 weight_decay=self.weight_decay,
@@ -150,7 +57,7 @@ class BPRLoss:
                 num_clusters=config.get('cluster_k', 16),
                 alpha=config.get('cluster_alpha', 0.3),
                 recluster_interval=config.get('cluster_interval', 200),
-                warmup_steps=config.get('cluster_warmup', 10),
+                cluster_start_step=config.get('cluster_warmup', 0),
                 min_cluster_rows=config.get('cluster_min_rows', 2),
             )
         elif self.optimizer_name == 'lamb':
@@ -163,7 +70,7 @@ class BPRLoss:
                 clamp_value=config.get('lamb_clamp', 10),
                 debias=config.get('lamb_debias', True),
             )
-        elif self.optimizer_name == 'adamw':
+        elif self.optimizer_name in ('adamw', 'adam'):
             self.opt = optim.AdamW(recmodel.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         elif self.optimizer_name == 'sgd':
             self.opt = optim.SGD(recmodel.parameters(), lr=self.lr, weight_decay=self.weight_decay, momentum=0.9)
@@ -434,7 +341,7 @@ class MetricsRecorder:
         self._initialized = os.path.exists(log_path) and os.path.getsize(log_path) > 0
 
     def _build_header(self):
-        columns = ['epoch']
+        columns = ['epoch', 'loss', 'precision', 'recall', 'ndcg', 'hr']
         metric_names = ['precision', 'recall', 'ndcg', 'hr']
         for metric in metric_names:
             for k in self.topks:
@@ -442,13 +349,18 @@ class MetricsRecorder:
         columns.extend(['convergence_speed', 'variance'])
         return columns
 
-    def log(self, epoch, metrics):
+    def log(self, epoch, metrics, train_loss=None):
+        metrics = metrics or {}
         row = {key: 0.0 for key in self.header}
         row['epoch'] = epoch
+        if train_loss is not None:
+            row['loss'] = float(train_loss)
         for metric_name in ['precision', 'recall', 'ndcg', 'hr']:
             values = metrics.get(metric_name)
             if values is None:
                 continue
+            if len(values) > 0:
+                row[metric_name] = float(values[0])
             for idx, k in enumerate(self.topks):
                 column = f"{metric_name}@{k}"
                 value = values[idx] if idx < len(values) else 0.0

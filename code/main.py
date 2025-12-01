@@ -38,19 +38,23 @@ else:
     world.cprint("not enable tensorflowboard")
 
 metrics_log_path = join(
-    world.BOARD_PATH,
-    f"metrics-{world.dataset}-{world.model_name}-{time.strftime('%m-%d-%Hh%Mm%Ss')}.csv"
+    world.CODE_PATH,
+    f"logs_{world.dataset}_{world.config['optimizer']}_{world.model_name}-{time.strftime('%m-%d-%Hh%Mm%Ss')}.csv"
 )
 metrics_logger = utils.MetricsRecorder(metrics_log_path, world.topks)
 print(f"logging metrics to {metrics_log_path}")
 
 try:
     for epoch in range(world.TRAIN_epochs):
-        output_information = Procedure.BPR_train_original(dataset, Recmodel, bpr, epoch, neg_k=Neg_k,w=w)
+        train_loss, output_information = Procedure.BPR_train_original(dataset, Recmodel, bpr, epoch, neg_k=Neg_k,w=w)
         print(f'EPOCH[{epoch+1}/{world.TRAIN_epochs}] {output_information}')
-        cprint("[TEST]")
-        epoch_metrics = Procedure.Test(dataset, Recmodel, epoch, w, world.config['multicore'])
-        metrics_logger.log(epoch + 1, epoch_metrics)
+        should_eval = (epoch % world.config.get('test_interval', 1) == 0)
+        if should_eval:
+            cprint("[TEST]")
+            epoch_metrics = Procedure.Test(dataset, Recmodel, epoch, w, world.config['multicore'])
+            metrics_logger.log(epoch + 1, epoch_metrics, train_loss=train_loss)
+        else:
+            metrics_logger.log(epoch + 1, {}, train_loss=train_loss)
         torch.save(Recmodel.state_dict(), weight_file)
         # torch.save(Recmodel, weight_file)
 finally:

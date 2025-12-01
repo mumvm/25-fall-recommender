@@ -38,9 +38,9 @@ def parse_args():
                         help="enable tensorboard")
     parser.add_argument('--comment', type=str,default="lgn")
     parser.add_argument('--load', type=int,default=0)
-    parser.add_argument('--epochs', type=int,default=1000)
+    parser.add_argument('--epochs', type=int,default=5)
     parser.add_argument('--optimizer', type=str, default='adamw',
-                        choices=['adamw', 'sgd', 'rmsprop', 'lamb', 'cluster'],
+                        choices=['adamw', 'adam', 'sgd', 'rmsprop', 'lamb', 'cluster'],
                         help="optimizer for BPR training")
     # ------------------ cluster option ------------------
     parser.add_argument('--cluster_alpha', type=float, default=0.3,
@@ -53,9 +53,28 @@ def parse_args():
                         help="skip clustering during the first N optimizer steps")
     parser.add_argument('--cluster_min_rows', type=int, default=2,
                         help="minimum rows needed to apply clustering")
+    parser.add_argument('--cluster_eps', type=float, default=1e-8,
+                        help="epsilon value for cluster-coupled AdamW")
+    # ---- aliases for notebook commands ----
+    parser.add_argument('--alpha', type=float, default=None,
+                        help="alias of cluster_alpha (for shared notebooks)")
+    parser.add_argument('--num_clusters', type=int, default=None,
+                        help="alias of cluster_k (for shared notebooks)")
+    parser.add_argument('--recluster_interval', type=int, default=None,
+                        help="alias of cluster_interval (for shared notebooks)")
     # --------------------- end ---------------------
+    parser.add_argument('--test_interval', type=int, default=1,
+                        help='run evaluation every N epochs')
     parser.add_argument('--multicore', type=int, default=0, help='whether we use multiprocessing or not in test')
     parser.add_argument('--pretrain', type=int, default=0, help='whether we use pretrained weight or not')
     parser.add_argument('--seed', type=int, default=2020, help='random seed')
     parser.add_argument('--model', type=str, default='lgn', help='rec-model, support [mf, lgn]')
-    return parser.parse_args()
+    args = parser.parse_args()
+    # alias handling to keep compatibility with shared notebooks
+    if args.alpha is not None:
+        args.cluster_alpha = args.alpha
+    if args.num_clusters is not None:
+        args.cluster_k = args.num_clusters
+    if args.recluster_interval is not None:
+        args.cluster_interval = args.recluster_interval
+    return args
