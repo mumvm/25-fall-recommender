@@ -119,7 +119,7 @@ class BPRLoss:
 
             self.opt = ClusterCoupledSGD(param_groups)
 
-        elif self.optimizer_name == 'lamb':
+        elif optimizer_name == 'lamb':
             self.opt = Lamb(
                 recmodel.parameters(),
                 lr=self.lr,
