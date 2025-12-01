@@ -15,7 +15,7 @@ from time import time
 from model import LightGCN
 from model import PairWiseModel
 from sklearn.metrics import roc_auc_score
-from optimizers import ClusterCoupledAdam, Lamb
+from optimizers import ClusterCoupledAdam, ClusterCoupledSGD, ClusterCoupledRMSProp, Lamb 
 import random
 import os
 import csv
@@ -32,34 +32,93 @@ except:
 
 class BPRLoss:
     def __init__(self,
-                 recmodel : PairWiseModel,
-                 config : dict):
+                 recmodel: PairWiseModel,
+                 config: dict):
+        """
+        BPRLoss: LightGCN 학습용 손실 + 옵티마이저 래퍼
+
+        - config['optimizer'] == 'adam'   → 기존 Adam 사용
+        - config['optimizer'] == 'cluster' → Cluster-Coupled AdamW 사용
+
+        weight_decay(reg)는 논문/원 코드처럼
+        self.model.bpr_loss에서 나온 reg_loss * config['decay']로만 적용하고,
+        옵티마이저쪽 weight_decay는 0으로 두는 방향으로 맞춤.
+        """
         self.model = recmodel
         self.weight_decay = config['decay']
         self.lr = config['lr']
-        self.optimizer_name = config.get('optimizer', 'adamw').lower()
 
-        if self.optimizer_name == 'cluster':
-            cluster_params = []
-            for name, param in recmodel.named_parameters():
-                is_embedding = param.dim() == 2 and ('embedding' in name or param.shape[0] > 1)
-                cluster_params.append({
-                    'params': [param],
-                    'clustered': is_embedding,
+        optimizer_name = config.get('optimizer', 'adam')
+
+        if optimizer_name == 'cluster':
+            # LightGCN의 임베딩 파라미터(embedding_user, embedding_item)에만
+            # 클러스터링을 적용하고, 나머지는 일반 Adam처럼 사용
+            emb_params = []
+            other_params = []
+            for name, p in self.model.named_parameters():
+                if ('embedding_user' in name) or ('embedding_item' in name):
+                    emb_params.append(p)
+                else:
+                    other_params.append(p)
+
+            param_groups = []
+            if emb_params:
+                param_groups.append({
+                    "params": emb_params,
+                    "lr": self.lr,
+                    "weight_decay": 0.0,  # reg_loss로만 decay 처리
+                    "clustered": True,
+                    "num_clusters": config.get("num_clusters", 16),
+                    "alpha": config.get("alpha", 0.5),
+                    "recluster_interval": config.get("recluster_interval", 100),
+                })
+            if other_params:
+                param_groups.append({
+                    "params": other_params,
+                    "lr": self.lr,
+                    "weight_decay": 0.0,  # 여기엔 클러스터링 X, 순수 Adam 업데이트
                 })
 
             self.opt = ClusterCoupledAdam(
-                cluster_params,
+                param_groups,
                 lr=self.lr,
-                weight_decay=self.weight_decay,
-                betas=config.get('cluster_betas', (0.9, 0.999)),
-                eps=config.get('cluster_eps', 1e-8),
-                num_clusters=config.get('cluster_k', 16),
-                alpha=config.get('cluster_alpha', 0.3),
-                recluster_interval=config.get('cluster_interval', 200),
-                cluster_start_step=config.get('cluster_warmup', 0),
-                min_cluster_rows=config.get('cluster_min_rows', 2),
+                weight_decay=0.0,  # reg_loss 사용하므로 여기선 0
             )
+        elif optimizer_name == 'cluster_sgd':
+            emb_params = []
+            other_params = []
+
+            for name, p in self.model.named_parameters():
+                if ('embedding_user' in name) or ('embedding_item' in name):
+                    emb_params.append(p)
+                else:
+                    other_params.append(p)
+
+            param_groups = []
+
+            # cluster + SGD
+            if emb_params:
+                param_groups.append({
+                    "params": emb_params,
+                    "lr": self.lr,
+                    "weight_decay": 0.0,
+                    "clustered": True,
+                    "num_clusters": config.get("num_clusters", 16),
+                    "alpha": config.get("alpha", 0.5),
+                    "recluster_interval": config.get("recluster_interval", 100),
+                    "momentum": 0.9,
+                })
+
+            if other_params:
+                param_groups.append({
+                    "params": other_params,
+                    "lr": self.lr,
+                    "weight_decay": 0.0,
+                    "momentum": 0.9,
+                })
+
+            self.opt = ClusterCoupledSGD(param_groups)
+
         elif self.optimizer_name == 'lamb':
             self.opt = Lamb(
                 recmodel.parameters(),
@@ -70,18 +129,65 @@ class BPRLoss:
                 clamp_value=config.get('lamb_clamp', 10),
                 debias=config.get('lamb_debias', True),
             )
-        elif self.optimizer_name in ('adamw', 'adam'):
-            self.opt = optim.AdamW(recmodel.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-        elif self.optimizer_name == 'sgd':
-            self.opt = optim.SGD(recmodel.parameters(), lr=self.lr, weight_decay=self.weight_decay, momentum=0.9)
-        elif self.optimizer_name == 'rmsprop':
-            self.opt = optim.RMSprop(recmodel.parameters(), lr=self.lr, weight_decay=self.weight_decay, momentum=0.9)
+
+        elif optimizer_name == 'sgd':
+            self.opt = optim.SGD(
+                recmodel.parameters(),
+                lr=self.lr,
+                momentum=0.9
+            )
+        elif optimizer_name == "rmsprop":
+          self.opt = optim.RMSprop(
+              recmodel.parameters(),
+              lr=self.lr,
+              weight_decay=0.0
+          )
+
+        elif optimizer_name == "cluster_rmsprop":
+            emb_params, other_params = [], []
+
+            for name, p in self.model.named_parameters():
+                if ('embedding_user' in name) or ('embedding_item' in name):
+                    emb_params.append(p)
+                else:
+                    other_params.append(p)
+
+            param_groups = []
+
+            if emb_params:
+                param_groups.append({
+                    "params": emb_params,
+                    "lr": self.lr,
+                    "clustered": True,
+                    "alpha_cluster": config.get("alpha", 0.5),
+                    "num_clusters": config.get("num_clusters", 16),
+                    "recluster_interval": config.get("recluster_interval", 100),
+                })
+
+            if other_params:
+                param_groups.append({
+                    "params": other_params,
+                    "lr": self.lr,
+                    "clustered": False,
+                })
+
+            self.opt = ClusterCoupledRMSProp(param_groups)
         else:
-            raise ValueError(f"Unsupported optimizer: {self.optimizer_name}")
+            # 기본: 원래 코드와 같은 Adam
+            self.opt = optim.Adam(
+                recmodel.parameters(),
+                lr=self.lr
+            )
 
     def stageOne(self, users, pos, neg):
+        """
+        한 step BPR 업데이트:
+        - 모델에서 BPR loss와 L2 reg_loss 받아옴
+        - reg_loss * weight_decay 더해서 최종 loss 만들고
+        - 선택된 옵티마이저(self.opt)로 한 번 업데이트
+        """
         loss, reg_loss = self.model.bpr_loss(users, pos, neg)
-        reg_loss = reg_loss*self.weight_decay
+        reg_loss = reg_loss * self.weight_decay
         loss = loss + reg_loss
 
         self.opt.zero_grad()
@@ -89,7 +195,6 @@ class BPRLoss:
         self.opt.step()
 
         return loss.cpu().item()
-
 
 def UniformSample_original(dataset, neg_ratio = 1):
     dataset : BasicDataset

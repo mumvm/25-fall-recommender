@@ -278,6 +278,235 @@ class ClusterCoupledAdam(Optimizer):
 
         return loss
 
+class ClusterCoupledSGD(Optimizer):
+    """
+    Cluster-Coupled SGD
+    - 클러스터링된 파라미터 그룹에 대해:
+        g̃_i = (1 - α) g_i + α * g_cluster(i)
+    - 이후 SGD 업데이트: p <- p - lr * g̃
+    """
+
+    def __init__(
+        self,
+        params,
+        lr=1e-2,
+        momentum=0.0,
+        weight_decay=0.0,
+    ):
+        defaults = dict(
+            lr=lr,
+            momentum=momentum,
+            weight_decay=weight_decay,
+        )
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def _update_clusters(self, p, state, num_clusters, recluster_interval):
+        step = state.get("cluster_step", 0)
+        assignments = state.get("assignments", None)
+
+        if assignments is None or step % recluster_interval == 0:
+            w2d = p.data.detach().view(p.shape[0], -1).cpu().numpy()
+
+            K = min(num_clusters, w2d.shape[0])
+            if K < 2:
+                assignments = torch.zeros(w2d.shape[0], dtype=torch.long, device=p.device)
+            else:
+                km = KMeans(n_clusters=K, random_state=42)
+                labels = km.fit_predict(w2d)
+                assignments = torch.from_numpy(labels).long().to(p.device)
+
+            state["assignments"] = assignments
+
+        state["cluster_step"] = step + 1
+        return state["assignments"]
+
+    @torch.no_grad()
+    def step(self, closure=None):
+
+        loss = None
+        if closure is not None:
+            loss = closure()
+
+        for group in self.param_groups:
+            lr = group["lr"]
+            momentum = group["momentum"]
+            weight_decay = group["weight_decay"]
+
+            clustered = group.get("clustered", False)
+            alpha = group.get("alpha", 0.5)
+            num_clusters = group.get("num_clusters", 8)
+            recluster_interval = group.get("recluster_interval", 100)
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+
+                grad = p.grad.data
+                state = self.state[p]
+
+                if len(state) == 0:
+                    state["momentum_buffer"] = torch.zeros_like(p)
+
+                    if clustered:
+                        state["cluster_step"] = 0
+                        state["assignments"] = None
+
+                # weight decay 적용
+                if weight_decay != 0:
+                    grad = grad.add(p.data, alpha=weight_decay)
+
+                # 클러스터 gradient 평균 섞기
+                if clustered:
+                    if p.data.dim() != 2:
+                        raise ValueError("Clustered param must be 2D")
+
+                    assignments = self._update_clusters(
+                        p, state, num_clusters, recluster_interval
+                    )
+
+                    g2d = grad.view(assignments.numel(), -1)
+                    K = int(assignments.max().item()) + 1
+
+                    gc = torch.zeros(K, g2d.size(1), device=grad.device)
+                    idx_expanded = assignments.view(-1, 1).expand(-1, g2d.size(1))
+                    gc.scatter_add_(0, idx_expanded, g2d)
+
+                    counts = torch.bincount(assignments, minlength=K).float().to(p.device)
+                    counts = counts.clamp_min(1).unsqueeze(1)
+                    gc = gc / counts
+
+                    mixed = (1 - alpha) * g2d + alpha * gc[assignments]
+                    grad = mixed.view_as(grad)
+
+                # SGD with momentum
+                buf = state["momentum_buffer"]
+                buf.mul_(momentum).add_(grad)
+
+                p.data.add_(buf, alpha=-lr)
+
+        return loss
+
+class ClusterCoupledRMSProp(Optimizer):
+    """
+    Cluster-Coupled RMSProp
+
+    g̃_i = (1 - α) g_i + α * g_cluster(i)
+    p ← p - lr * g̃_i / (sqrt(E[g̃_i^2]) + eps)
+    """
+
+    def __init__(
+        self,
+        params,
+        lr=1e-3,
+        alpha_cluster=0.5,
+        num_clusters=16,
+        recluster_interval=100,
+        rho=0.9,
+        eps=1e-8,
+        weight_decay=0.0,
+    ):
+        defaults = dict(
+            lr=lr,
+            alpha_cluster=alpha_cluster,
+            num_clusters=num_clusters,
+            recluster_interval=recluster_interval,
+            rho=rho,
+            eps=eps,
+            weight_decay=weight_decay,
+        )
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def _update_clusters(self, p, state, num_clusters, recluster_interval):
+        step = state.get("cluster_step", 0)
+        assignments = state.get("assignments", None)
+
+        if assignments is None or step % recluster_interval == 0:
+            w2d = p.data.detach().view(p.shape[0], -1).cpu().numpy()
+
+            K = min(num_clusters, w2d.shape[0])
+            if K < 2:
+                assignments = torch.zeros(w2d.shape[0], dtype=torch.long, device=p.device)
+            else:
+                km = KMeans(n_clusters=K, random_state=42)
+                labels = km.fit_predict(w2d)
+                assignments = torch.from_numpy(labels).long().to(p.device)
+
+            state["assignments"] = assignments
+
+        state["cluster_step"] = step + 1
+        return state["assignments"]
+
+    @torch.no_grad()
+    def step(self, closure=None):
+
+        loss = None
+        if closure is not None:
+            loss = closure()
+
+        for group in self.param_groups:
+            lr = group["lr"]
+            rho = group["rho"]
+            eps = group["eps"]
+            weight_decay = group["weight_decay"]
+
+            alpha_c = group["alpha_cluster"]
+            num_clusters = group["num_clusters"]
+            recluster_interval = group["recluster_interval"]
+
+            clustered = group.get("clustered", False)
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+
+                grad = p.grad.data
+                state = self.state[p]
+
+                if len(state) == 0:
+                    state["square_avg"] = torch.zeros_like(p)
+                    if clustered:
+                        state["cluster_step"] = 0
+                        state["assignments"] = None
+
+                # weight decay
+                if weight_decay != 0:
+                    grad = grad.add(p.data, alpha=weight_decay)
+
+                # ---- Cluster Mixing ----
+                if clustered:
+                    if p.data.dim() != 2:
+                        raise ValueError("Clustered param must be 2D")
+
+                    assignments = self._update_clusters(
+                        p, state, num_clusters, recluster_interval
+                    )
+
+                    g2d = grad.view(assignments.numel(), -1)
+
+                    K = int(assignments.max().item()) + 1
+                    gc = torch.zeros(K, g2d.size(1), device=p.device)
+
+                    idx_expanded = assignments.view(-1, 1).expand(-1, g2d.size(1))
+                    gc.scatter_add_(0, idx_expanded, g2d)
+
+                    counts = torch.bincount(assignments, minlength=K).float().to(p.device)
+                    counts = counts.clamp_min(1).unsqueeze(1)
+
+                    gc = gc / counts
+                    mixed = (1 - alpha_c) * g2d + alpha_c * gc[assignments]
+                    grad = mixed.view_as(grad)
+
+                # ---- RMSProp 업데이트 ----
+                square_avg = state["square_avg"]
+                square_avg.mul_(rho).addcmul_(grad, grad, value=1 - rho)
+
+                avg = grad / (square_avg.sqrt() + eps)
+
+                p.data.add_(avg, alpha=-lr)
+
+        return loss
 
 class Lamb(Optimizer):
     def __init__(self,
