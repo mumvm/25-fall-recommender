@@ -6,7 +6,6 @@ import torch
 from sklearn.cluster import KMeans
 from torch.optim import Optimizer
 
-
 class ClusterCoupledAdam(Optimizer):
     """
     Cluster-Coupled AdamW optimizer.
@@ -31,26 +30,9 @@ class ClusterCoupledAdam(Optimizer):
         betas=(0.9, 0.999),
         eps=1e-8,
         weight_decay=0.0,
-        alpha=0.5,
-        num_clusters=8,
-        recluster_interval=100,
-        cluster_source="param",
-        cluster_beta=0.9,
-        cluster_start_step=0,
-        min_cluster_rows=2,
     ):
         defaults = dict(
-            lr=lr,
-            betas=betas,
-            eps=eps,
-            weight_decay=weight_decay,
-            alpha=alpha,
-            num_clusters=num_clusters,
-            recluster_interval=recluster_interval,
-            cluster_source=cluster_source,
-            cluster_beta=cluster_beta,
-            cluster_start_step=cluster_start_step,
-            min_cluster_rows=min_cluster_rows,
+            lr=lr, betas=betas, eps=eps, weight_decay=weight_decay
         )
         super().__init__(params, defaults)
 
@@ -83,14 +65,7 @@ class ClusterCoupledAdam(Optimizer):
         return best_k
 
     @torch.no_grad()
-    def _update_clusters(
-        self,
-        base_tensor,
-        state,
-        num_clusters,
-        recluster_interval,
-        min_cluster_rows,
-    ):
+    def _update_clusters(self, base_tensor, state, num_clusters, recluster_interval):
         """
         하나의 파라미터 텐서에 대해 K-means 클러스터링을 업데이트하는 함수.
 
@@ -107,13 +82,6 @@ class ClusterCoupledAdam(Optimizer):
             w2d = base_tensor.detach().view(base_tensor.shape[0], -1).cpu().numpy()
 
             k_max = min(num_clusters, w2d.shape[0])
-            if w2d.shape[0] < min_cluster_rows:
-                assignments = torch.zeros(
-                    w2d.shape[0], dtype=torch.long, device=base_tensor.device
-                )
-                state["assignments"] = assignments
-                state["cluster_step"] = step + 1
-                return assignments
 
             if k_max < 2:
                 assignments = torch.zeros(
@@ -172,7 +140,6 @@ class ClusterCoupledAdam(Optimizer):
             alpha = group.get("alpha", 0.5)
             num_clusters = group.get("num_clusters", 8)
             recluster_interval = group.get("recluster_interval", 100)
-            min_cluster_rows = group.get("min_cluster_rows", 2)
 
             cluster_source = group.get("cluster_source", "param")   # "param" / "grad" / "ema_grad"
             cluster_beta   = group.get("cluster_beta", 0.9)         # EMA 계수 (0.9 ~ 0.99 정도)
@@ -212,8 +179,8 @@ class ClusterCoupledAdam(Optimizer):
                     grad = grad.add(p.data, alpha=weight_decay)
 
                 # 2) Cluster-Coupled gradient 혼합 부분
-                #    → burn-in 구간(current_step < cluster_start_step)에서는 **혼합 X**
-                if clustered and current_step >= cluster_start_step:   ### 🔹 조건 추가
+                #    → burn-in 구간(current_step < cluster_start_step)에서는 혼합 X
+                if clustered and current_step >= cluster_start_step:   ### 조건 추가
                     if p.data.dim() != 2:
                         raise ValueError(
                             "Clustered param must be a 2D tensor (e.g., [num_embeddings, dim])."
@@ -236,11 +203,7 @@ class ClusterCoupledAdam(Optimizer):
 
                     # 클러스터링 수행
                     assignments = self._update_clusters(
-                        base_tensor,
-                        state,
-                        num_clusters,
-                        recluster_interval,
-                        min_cluster_rows,
+                        base_tensor, state, num_clusters, recluster_interval
                     )
 
                     if assignments.dim() != 1 or assignments.size(0) != p.shape[0]:
