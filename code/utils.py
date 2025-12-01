@@ -38,7 +38,7 @@ class BPRLoss:
         BPRLoss: LightGCN 학습용 손실 + 옵티마이저 래퍼
 
         - config['optimizer'] == 'adam'   → 기존 Adam 사용
-        - config['optimizer'] == 'cluster' → Cluster-Coupled AdamW 사용
+        - config['optimizer'] == 'cluster' → Cluster-Coupled Adam 사용
 
         weight_decay(reg)는 논문/원 코드처럼
         self.model.bpr_loss에서 나온 reg_loss * config['decay']로만 적용하고,
