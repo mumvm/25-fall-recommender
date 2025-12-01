@@ -118,31 +118,6 @@ class BPRLoss:
                 })
 
             self.opt = ClusterCoupledSGD(param_groups)
-
-        elif optimizer_name == 'lamb':
-            self.opt = Lamb(
-                recmodel.parameters(),
-                lr=self.lr,
-                weight_decay=self.weight_decay,
-                betas=config.get('lamb_betas', (0.9, 0.999)),
-                eps=config.get('lamb_eps', 1e-6),
-                clamp_value=config.get('lamb_clamp', 10),
-                debias=config.get('lamb_debias', True),
-            )
-
-        elif optimizer_name == 'sgd':
-            self.opt = optim.SGD(
-                recmodel.parameters(),
-                lr=self.lr,
-                momentum=0.9
-            )
-        elif optimizer_name == "rmsprop":
-          self.opt = optim.RMSprop(
-              recmodel.parameters(),
-              lr=self.lr,
-              weight_decay=0.0
-          )
-
         elif optimizer_name == "cluster_rmsprop":
             emb_params, other_params = [], []
 
@@ -172,8 +147,32 @@ class BPRLoss:
                 })
 
             self.opt = ClusterCoupledRMSProp(param_groups)
+
+        elif optimizer_name == 'lamb':
+            self.opt = Lamb(
+                recmodel.parameters(),
+                lr=self.lr,
+                weight_decay=self.weight_decay,
+                betas=config.get('lamb_betas', (0.9, 0.999)),
+                eps=config.get('lamb_eps', 1e-6),
+                clamp_value=config.get('lamb_clamp', 10),
+                debias=config.get('lamb_debias', True),
+            )
+
+        elif optimizer_name == 'sgd':
+            self.opt = optim.SGD(
+                recmodel.parameters(),
+                lr=self.lr,
+                momentum=0.9
+            )
+        elif optimizer_name == "rmsprop":
+          self.opt = optim.RMSprop(
+              recmodel.parameters(),
+              lr=self.lr,
+              weight_decay=0.0
+          )
+
         else:
-            # 기본: 원래 코드와 같은 Adam
             self.opt = optim.Adam(
                 recmodel.parameters(),
                 lr=self.lr

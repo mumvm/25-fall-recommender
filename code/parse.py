@@ -39,8 +39,8 @@ def parse_args():
     parser.add_argument('--comment', type=str,default="lgn")
     parser.add_argument('--load', type=int,default=0)
     parser.add_argument('--epochs', type=int,default=5)
-    parser.add_argument('--optimizer', type=str, default='adamw',
-                        choices=['adamw', 'adam', 'sgd', 'rmsprop', 'lamb', 'cluster'],
+    parser.add_argument('--optimizer', type=str, default='adam',
+                        choices=['adam', 'sgd', 'rmsprop', 'lamb', 'cluster', 'cluster_sgd', 'cluster_rmsprop'],
                         help="optimizer for BPR training")
     # ------------------ cluster option ------------------
     parser.add_argument('--cluster_alpha', type=float, default=0.3,
