@@ -54,7 +54,10 @@ config['optimizer'] = args.optimizer
 config['test_interval'] = args.test_interval
 config['A_split'] = False
 config['bigdata'] = False
-config['num_clusters'] = config['cluster_k']
+# config['num_clusters'] = config['cluster_k']
+config['alpha'] = args.alpha
+config['num_clusters'] = args.num_clusters
+config['recluster_interval'] = args.recluster_interval
 
 GPU = torch.cuda.is_available()
 device = torch.device('cuda' if GPU else "cpu")
