@@ -114,7 +114,7 @@ class ClusterCoupledAdam(Optimizer):
         """
         - 각 param group과 파라미터에 대해:
           1) weight decay 적용 (Adam 방식)
-          2) (clustered=True & burn-in 지나면) gradient를 클러스터 평균과 섞어 g̃ 계산
+          2) (clustered=True & burn-in 지나면) gradient를 클러스터 평균과 섞어서 g̃ 계산
           3) Adam 모멘트 업데이트 및 파라미터 갱신
         """
         loss = None
@@ -134,9 +134,9 @@ class ClusterCoupledAdam(Optimizer):
             num_clusters = group.get("num_clusters", 8)
             recluster_interval = group.get("recluster_interval", 100)
 
-            cluster_source = group.get("cluster_source", "param")
-            cluster_beta   = group.get("cluster_beta", 0.9)
-            cluster_start_step = group.get("cluster_start_step", group.get("cluster_warmup", 0)) # burn-in 종료 step
+            cluster_source = group.get("cluster_source", "param")   # "param" / "grad" / "ema_grad"
+            cluster_beta   = group.get("cluster_beta", 0.9)         # EMA 계수 (0.9 ~ 0.99 정도)
+            cluster_start_step = group.get("cluster_start_step", 0) # burn-in 끝나는 step
 
             for p in group["params"]:
                 if p.grad is None:
@@ -165,7 +165,7 @@ class ClusterCoupledAdam(Optimizer):
 
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
                 state["step"] += 1
-                current_step = state["step"]  ### 현재 step
+                current_step = state["step"]
 
                 # weight decay
                 if weight_decay != 0.0:
@@ -204,20 +204,42 @@ class ClusterCoupledAdam(Optimizer):
                     g2d = grad.view(p.shape[0], -1)
                     K = int(assignments.max().item() + 1)
 
-                    gc = torch.zeros(K, g2d.size(1), device=grad.device)
+                    # [수정 1] Active Mask 생성 (현재 배치에서 gradient가 발생한 행만 1, 나머진 0)
+                    # 엡실론보다 큰 값을 가진 경우를 active로 간주
+                    active_mask = (g2d.abs().sum(dim=1, keepdim=True) > 1e-10).float()
+                    
+                    # [수정 2] 분자(Sum) 계산: g2d에는 이미 0이 많으므로 그대로 더해도 됨
+                    gc_sum = torch.zeros(K, g2d.size(1), device=grad.device)
                     idx_expanded = assignments.view(-1, 1).expand(-1, g2d.size(1))
-                    gc.scatter_add_(0, idx_expanded, g2d)
+                    gc_sum.scatter_add_(0, idx_expanded, g2d)
 
-                    counts = torch.bincount(
-                        assignments, minlength=K
-                    ).float().to(grad.device).unsqueeze(1)
-                    counts = counts.clamp_min(1.0)
-                    gc = gc / counts
+                    # [수정 3] 분모(Count) 계산: 전체 인원이 아니라, 'Active한 인원'만 카운트해야 함
+                    gc_count = torch.zeros(K, 1, device=grad.device)
+                    # active_mask가 1인 곳의 assignment 인덱스만 카운트
+                    # active_mask가 1인 곳의 assignment를 가져와서 bincount 하거나 scatter_add 사용
+                    # 여기서는 scatter_add 사용이 차원 맞추기 용이
+                    active_assignments_idx = assignments.view(-1, 1)
+                    gc_count.scatter_add_(0, active_assignments_idx, active_mask)
+                    
+                    gc_count = gc_count.clamp_min(1.0) # 0으로 나누기 방지
+                    gc_avg = gc_sum / gc_count # 진정한 Active Average
 
-                    mixed = (1.0 - alpha) * g2d + alpha * gc[assignments]
-                    grad = mixed.view_as(grad)
+                    # [수정 4] Mixing: Active한 행에 대해서만 Mixing 수행
+                    # Active하지 않은 행(grad=0)은 그대로 0 유지 (mixed 연산에서 제외하거나 마스킹)
+                    
+                    # gc_avg[assignments]는 (N, dim) 형태
+                    target_gc = gc_avg[assignments]
+                    
+                    # Active한 녀석들만: (1-a)g + a*gc
+                    # Inactive한 녀석들: 0
+                    mixed = (1.0 - alpha) * g2d + alpha * target_gc
+                    
+                    # 최종 마스킹: 원래 grad가 0이었던 곳은 업데이트 하지 않음!
+                    grad = mixed * active_mask
+                    grad = grad.view_as(p.grad)
+                # else: burn-in 구간에서는 grad를 그대로 사용 (클러스터링 안 함)
 
-                # Adam update
+                # 3) Adam 업데이트 (표준 Adam)
                 beta1_t, beta2_t = beta1, beta2
                 exp_avg.mul_(beta1_t).add_(grad, alpha=1 - beta1_t)
                 exp_avg_sq.mul_(beta2_t).addcmul_(grad, grad, value=1 - beta2_t)
