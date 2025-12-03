@@ -38,7 +38,7 @@ else:
     world.cprint("not enable tensorflowboard")
 
 metrics_log_path = join(
-    world.CODE_PATH,
+    world.BOARD_PATH,
     f"logs_{world.dataset}_{world.config['optimizer']}_{world.model_name}-{time.strftime('%m-%d-%Hh%Mm%Ss')}.csv"
 )
 metrics_logger = utils.MetricsRecorder(metrics_log_path, world.topks)
