@@ -37,12 +37,6 @@ class ClusterCoupledAdam(Optimizer):
         super().__init__(params, defaults)
 
     def _find_best_k_elbow(self, w2d, k_min=2, k_max=16):
-        """
-        elbow method로 최적 K를 고르는 함수.
-        - w2d: (num_rows, dim) numpy array
-        - k_min, k_max: 탐색할 K 범위
-        반환: best_k (int)
-        """
         Ks = list(range(k_min, k_max + 1))
         inertias = []
 
@@ -118,10 +112,9 @@ class ClusterCoupledAdam(Optimizer):
     @torch.no_grad()
     def step(self, closure=None):
         """
-        Optimizer의 한 step 수행 함수.
         - 각 param group과 파라미터에 대해:
           1) weight decay 적용 (Adam 방식)
-          2) (clustered=True & burn-in 지나면) gradient를 클러스터 평균과 섞어서 g̃ 계산
+          2) (clustered=True & burn-in 지나면) gradient를 클러스터 평균과 섞어 g̃ 계산
           3) Adam 모멘트 업데이트 및 파라미터 갱신
         """
         loss = None
@@ -141,9 +134,9 @@ class ClusterCoupledAdam(Optimizer):
             num_clusters = group.get("num_clusters", 8)
             recluster_interval = group.get("recluster_interval", 100)
 
-            cluster_source = group.get("cluster_source", "param")   # "param" / "grad" / "ema_grad"
-            cluster_beta   = group.get("cluster_beta", 0.9)         # EMA 계수 (0.9 ~ 0.99 정도)
-            cluster_start_step = group.get("cluster_start_step", group.get("cluster_warmup", 0)) # burn-in 끝나는 step
+            cluster_source = group.get("cluster_source", "param")
+            cluster_beta   = group.get("cluster_beta", 0.9)
+            cluster_start_step = group.get("cluster_start_step", group.get("cluster_warmup", 0)) # burn-in 종료 step
 
             for p in group["params"]:
                 if p.grad is None:
@@ -174,19 +167,18 @@ class ClusterCoupledAdam(Optimizer):
                 state["step"] += 1
                 current_step = state["step"]  ### 현재 step
 
-                # 1) Adam 스타일 weight decay
+                # weight decay
                 if weight_decay != 0.0:
                     grad = grad.add(p.data, alpha=weight_decay)
 
-                # 2) Cluster-Coupled gradient 혼합 부분
-                #    → burn-in 구간(current_step < cluster_start_step)에서는 혼합 X
-                if clustered and current_step >= cluster_start_step:   ### 조건 추가
+                # gradient mixing
+                if clustered and current_step >= cluster_start_step:
                     if p.data.dim() != 2:
                         raise ValueError(
                             "Clustered param must be a 2D tensor (e.g., [num_embeddings, dim])."
                         )
 
-                    # EMA-grad 업데이트 (cluster_source == "ema_grad"일 때만)
+                    # EMA-grad update
                     if cluster_source == "ema_grad":
                         ema = state.get("ema_grad", None)
                         if ema is None:
@@ -201,7 +193,7 @@ class ClusterCoupledAdam(Optimizer):
                     else:
                         raise ValueError(f"Unknown cluster_source: {cluster_source}")
 
-                    # 클러스터링 수행
+                    # clustering
                     assignments = self._update_clusters(
                         base_tensor, state, num_clusters, recluster_interval
                     )
@@ -224,9 +216,8 @@ class ClusterCoupledAdam(Optimizer):
 
                     mixed = (1.0 - alpha) * g2d + alpha * gc[assignments]
                     grad = mixed.view_as(grad)
-                # else: burn-in 구간에서는 grad를 그대로 사용 (클러스터링 안 함)
 
-                # 3) Adam 업데이트 (표준 Adam)
+                # Adam update
                 beta1_t, beta2_t = beta1, beta2
                 exp_avg.mul_(beta1_t).add_(grad, alpha=1 - beta1_t)
                 exp_avg_sq.mul_(beta2_t).addcmul_(grad, grad, value=1 - beta2_t)
@@ -242,13 +233,6 @@ class ClusterCoupledAdam(Optimizer):
         return loss
 
 class ClusterCoupledSGD(Optimizer):
-    """
-    Cluster-Coupled SGD
-    - 클러스터링된 파라미터 그룹에 대해:
-        g̃_i = (1 - α) g_i + α * g_cluster(i)
-    - 이후 SGD 업데이트: p <- p - lr * g̃
-    """
-
     def __init__(
         self,
         params,
@@ -315,11 +299,11 @@ class ClusterCoupledSGD(Optimizer):
                         state["cluster_step"] = 0
                         state["assignments"] = None
 
-                # weight decay 적용
+                # weight decay
                 if weight_decay != 0:
                     grad = grad.add(p.data, alpha=weight_decay)
 
-                # 클러스터 gradient 평균 섞기
+                # gradient mixing
                 if clustered:
                     if p.data.dim() != 2:
                         raise ValueError("Clustered param must be 2D")
@@ -351,13 +335,6 @@ class ClusterCoupledSGD(Optimizer):
         return loss
 
 class ClusterCoupledRMSProp(Optimizer):
-    """
-    Cluster-Coupled RMSProp
-
-    g̃_i = (1 - α) g_i + α * g_cluster(i)
-    p ← p - lr * g̃_i / (sqrt(E[g̃_i^2]) + eps)
-    """
-
     def __init__(
         self,
         params,
@@ -437,7 +414,7 @@ class ClusterCoupledRMSProp(Optimizer):
                 if weight_decay != 0:
                     grad = grad.add(p.data, alpha=weight_decay)
 
-                # ---- Cluster Mixing ----
+                # cluster mixing
                 if clustered:
                     if p.data.dim() != 2:
                         raise ValueError("Clustered param must be 2D")
@@ -461,7 +438,7 @@ class ClusterCoupledRMSProp(Optimizer):
                     mixed = (1 - alpha_c) * g2d + alpha_c * gc[assignments]
                     grad = mixed.view_as(grad)
 
-                # ---- RMSProp 업데이트 ----
+                # update
                 square_avg = state["square_avg"]
                 square_avg.mul_(rho).addcmul_(grad, grad, value=1 - rho)
 
