@@ -143,7 +143,7 @@ class ClusterCoupledAdam(Optimizer):
 
             cluster_source = group.get("cluster_source", "param")   # "param" / "grad" / "ema_grad"
             cluster_beta   = group.get("cluster_beta", 0.9)         # EMA 계수 (0.9 ~ 0.99 정도)
-            cluster_start_step = group.get("cluster_start_step", 0) # burn-in 끝나는 step
+            cluster_start_step = group.get("cluster_start_step", group.get("cluster_warmup", 0)) # burn-in 끝나는 step
 
             for p in group["params"]:
                 if p.grad is None:

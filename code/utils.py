@@ -71,6 +71,7 @@ class BPRLoss:
                     "num_clusters": config.get("num_clusters", 16),
                     "alpha": config.get("alpha", 0.5),
                     "recluster_interval": config.get("recluster_interval", 100),
+                    "cluster_start_step": config.get("cluster_warmup", 0),
                 })
             if other_params:
                 param_groups.append({
@@ -106,6 +107,7 @@ class BPRLoss:
                     "num_clusters": config.get("num_clusters", 16),
                     "alpha": config.get("alpha", 0.5),
                     "recluster_interval": config.get("recluster_interval", 100),
+                    "cluster_start_step": config.get("cluster_warmup", 0),
                     "momentum": 0.9,
                 })
 
@@ -137,6 +139,7 @@ class BPRLoss:
                     "alpha_cluster": config.get("alpha", 0.5),
                     "num_clusters": config.get("num_clusters", 16),
                     "recluster_interval": config.get("recluster_interval", 100),
+                    "cluster_start_step": config.get("cluster_warmup", 0),
                 })
 
             if other_params:
