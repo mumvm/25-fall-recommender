@@ -9,18 +9,18 @@ from torch.optim import Optimizer
 class ClusterCoupledAdam(Optimizer):
     """
     Cluster-Coupled Adam optimizer.
-    - 일부 param group에 대해:
-      * 주기적으로 K-means로 row 단위 클러스터링
-      * 클러스터별 평균 gradient를 계산 후 혼합
-      * 혼합된 gradient로 Adam 업데이트
+    - For param group:
+      * K-means로 row 단위 클러스터링
+      * 클러스터별 평균 gradient를 계산 후 mixing
+      * Mixed gradient로 Adam 업데이트
     - param group 옵션:
       * clustered: True/False
-      * num_clusters: K (elbow method로 2~K 중 선택)
+      * num_clusters: K (elbow method, 2~K 중 선택)
       * alpha: 클러스터 공유 강도 (0~1)
-      * recluster_interval: 재클러스터링 주기 (step 기준)
+      * recluster_interval: reclustering frequency (step)
       * cluster_source: "param" / "grad" / "ema_grad"
-      * cluster_beta: EMA 계수 (cluster_source="ema_grad"일 때 사용)
-      * cluster_start_step: 몇 번째 step부터 클러스터링을 켤지 (burn-in 용, 기본 0)
+        * cluster_beta: EMA 계수 (cluster_source="ema_grad"일 때 사용)
+      * cluster_start_step: 몇 번째 step부터 클러스터링을 켤지 (burn-in, default 0)
     """
 
     def __init__(
