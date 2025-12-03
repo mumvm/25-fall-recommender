@@ -8,11 +8,11 @@ from torch.optim import Optimizer
 
 class ClusterCoupledAdam(Optimizer):
     """
-    Cluster-Coupled AdamW optimizer.
+    Cluster-Coupled Adam optimizer.
     - 일부 param group에 대해:
       * 주기적으로 K-means로 row 단위 클러스터링
       * 클러스터별 평균 gradient를 계산 후 혼합
-      * 혼합된 gradient로 AdamW 업데이트
+      * 혼합된 gradient로 Adam 업데이트
     - param group 옵션:
       * clustered: True/False
       * num_clusters: K (elbow method로 2~K 중 선택)
@@ -120,7 +120,7 @@ class ClusterCoupledAdam(Optimizer):
         """
         Optimizer의 한 step 수행 함수.
         - 각 param group과 파라미터에 대해:
-          1) weight decay 적용 (AdamW 방식)
+          1) weight decay 적용 (Adam 방식)
           2) (clustered=True & burn-in 지나면) gradient를 클러스터 평균과 섞어서 g̃ 계산
           3) Adam 모멘트 업데이트 및 파라미터 갱신
         """
@@ -172,9 +172,9 @@ class ClusterCoupledAdam(Optimizer):
 
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
                 state["step"] += 1
-                current_step = state["step"]  ### 🔹 현재 step
+                current_step = state["step"]  ### 현재 step
 
-                # 1) AdamW 스타일 weight decay
+                # 1) Adam 스타일 weight decay
                 if weight_decay != 0.0:
                     grad = grad.add(p.data, alpha=weight_decay)
 
