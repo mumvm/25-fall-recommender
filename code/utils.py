@@ -51,8 +51,7 @@ class BPRLoss:
         optimizer_name = config.get('optimizer', 'adam')
 
         if optimizer_name == 'cluster':
-            # LightGCN의 임베딩 파라미터(embedding_user, embedding_item)에만
-            # 클러스터링을 적용하고, 나머지는 일반 Adam처럼 사용
+            # LightGCN의 임베딩 파라미터(embedding_user, embedding_item)에만 클러스터링을 적용하고 나머지는 일반 Adam처럼 사용
             emb_params = []
             other_params = []
             for name, p in self.model.named_parameters():
@@ -72,18 +71,20 @@ class BPRLoss:
                     "alpha": config.get("alpha", 0.5),
                     "recluster_interval": config.get("recluster_interval", 100),
                     "cluster_start_step": config.get("cluster_warmup", 0),
+                    "cluster_source": config.get("cluster_source", "ema_grad"),
+                    "cluster_beta": 0.9
                 })
             if other_params:
                 param_groups.append({
                     "params": other_params,
                     "lr": self.lr,
-                    "weight_decay": 0.0,  # 여기엔 클러스터링 X, 순수 Adam 업데이트
+                    "weight_decay": 0.0,  # 클러스터링 X 순수 Adam 업데이트
                 })
 
             self.opt = ClusterCoupledAdam(
                 param_groups,
                 lr=self.lr,
-                weight_decay=0.0,  # reg_loss 사용하므로 여기선 0
+                weight_decay=0.0,  
             )
         elif optimizer_name == 'cluster_sgd':
             emb_params = []
@@ -107,7 +108,6 @@ class BPRLoss:
                     "num_clusters": config.get("num_clusters", 16),
                     "alpha": config.get("alpha", 0.5),
                     "recluster_interval": config.get("recluster_interval", 100),
-                    "cluster_start_step": config.get("cluster_warmup", 0),
                     "momentum": 0.9,
                 })
 
@@ -139,7 +139,6 @@ class BPRLoss:
                     "alpha_cluster": config.get("alpha", 0.5),
                     "num_clusters": config.get("num_clusters", 16),
                     "recluster_interval": config.get("recluster_interval", 100),
-                    "cluster_start_step": config.get("cluster_warmup", 0),
                 })
 
             if other_params:
@@ -183,10 +182,10 @@ class BPRLoss:
 
     def stageOne(self, users, pos, neg):
         """
-        한 step BPR 업데이트:
+        1 step BPR 업데이트:
         - 모델에서 BPR loss와 L2 reg_loss 받아옴
-        - reg_loss * weight_decay 더해서 최종 loss 만들고
-        - 선택된 옵티마이저(self.opt)로 한 번 업데이트
+        - reg_loss * weight_decay 더해서 최종 loss 만듦
+        - 선택된 옵티마이저(self.opt)로 업데이트
         """
         loss, reg_loss = self.model.bpr_loss(users, pos, neg)
         reg_loss = reg_loss * self.weight_decay

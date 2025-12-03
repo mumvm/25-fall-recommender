@@ -55,6 +55,11 @@ def parse_args():
                         help="minimum rows needed to apply clustering")
     parser.add_argument('--cluster_eps', type=float, default=1e-8,
                         help="epsilon value for cluster-coupled AdamW")
+    # [추가] 클러스터링 기준 변경 (Strategy 1 적용)
+    # default='ema_grad'로 설정하여 별도 설정 없이도 바로 전략 1이 적용되도록 함
+    parser.add_argument('--cluster_source', type=str, default='ema_grad',
+                        choices=['param', 'grad', 'ema_grad'],
+                        help="source for clustering: 'param'(location) or 'ema_grad'(direction)")
     # ---- aliases for notebook commands ----
     parser.add_argument('--alpha', type=float, default=None,
                         help="alias of cluster_alpha (for shared notebooks)")

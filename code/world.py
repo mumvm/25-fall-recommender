@@ -49,6 +49,7 @@ config['cluster_interval'] = args.cluster_interval
 config['cluster_warmup'] = args.cluster_warmup
 config['cluster_min_rows'] = args.cluster_min_rows
 config['cluster_eps'] = args.cluster_eps
+config['cluster_source'] = args.cluster_source
 config['pretrain'] = args.pretrain
 config['optimizer'] = args.optimizer
 config['test_interval'] = args.test_interval
